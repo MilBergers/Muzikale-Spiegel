@@ -38,7 +38,7 @@
 3. **Models**  
    De benodigde face-api.js modellen zijn al opgenomen in de map `public/models`. Er is dus geen extra download nodig.
 
-## Running Locally
+## Demo starten
 
 Start de development server:
 
@@ -48,15 +48,6 @@ npm start
 
 De app opent op [http://localhost:3000](http://localhost:3000). Sta camera-toegang toe wanneer daarom wordt gevraagd.
 
-## Building for Production
-
-Genereer een productie-build:
-
-```bash
-npm run build
-```
-
-De geoptimaliseerde bestanden vind je in de `build/` directory.
 
 ## Project Structure
 
