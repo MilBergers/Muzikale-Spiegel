@@ -2,6 +2,9 @@
 
 **De Muzikale Spiegel** is een React-applicatie die je webcam gebruikt om gelaatsuitdrukkingen te detecteren en in real-time dynamische muziek te genereren op basis van je emoties. Aangedreven door **face-api.js** voor emotieherkenning en **Tone.js** voor audio-synthese, creëert dit project een interactieve audio-visuele ervaring.
 
+![ChatGPT Image 24 apr 2025, 14_14_25](https://github.com/user-attachments/assets/bb9133d7-ebb0-4b27-bda6-b07f9ba1c5fd)
+
+
 ## Functies
 
 - **Realtijd emotiedetectie**: detecteert zeven emoties (happy, sad, angry, fearful, disgusted, surprised, neutral) met face-api.js.
