@@ -28,9 +28,6 @@
    ```bash
    git clone https://github.com/MilBergers/Muzikale-Spiegel.git
    cd Muzikale-Spiegel
-   ```bash
-   git clone https://github.com/<your-username>/<your-repo>.git
-   cd <your-repo>
    ```
 
 2. **Install dependencies**  
