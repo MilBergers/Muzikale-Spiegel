@@ -12,11 +12,13 @@ function App() {
   // State hooks
   const [isModelLoaded, setIsModelLoaded] = useState(false);
   const [detectedEmotion, setDetectedEmotion] = useState('neutral');
+  const [stableEmotion, setStableEmotion] = useState('neutral'); // New: emotion that's been stable for threshold time
   const [isAudioInitialized, setIsAudioInitialized] = useState(false);
   const [volume, setVolume] = useState(-15); // Volume in decibels (dB)
   const [musicMode, setMusicMode] = useState('dynamic'); // 'dynamic' or 'manual'
   const [manualEmotion, setManualEmotion] = useState('neutral');
   const [showDebugMenu, setShowDebugMenu] = useState(false);
+  const [moodStabilityThreshold, setMoodStabilityThreshold] = useState(1); // Changed: Default is now 1 second
   const [audioParams, setAudioParams] = useState({
     tempo: 100,
     scale: 'major',
@@ -32,6 +34,8 @@ function App() {
   const isAudioInitializedRef = useRef(false);
   const musicModeRef = useRef('dynamic');
   const detectedEmotionRef = useRef('neutral');
+  const lastEmotionChangeTimeRef = useRef(Date.now()); // New: track when emotion changed
+  const moodStabilityThresholdRef = useRef(1); // Track stability threshold in a ref
   
   // Initialize modules on component mount
   useEffect(() => {
@@ -76,17 +80,38 @@ function App() {
     detectedEmotionRef.current = detectedEmotion;
   }, [detectedEmotion]);
   
-  // Handle emotion detection
+  // Update moodStabilityThresholdRef when the state changes
+  useEffect(() => {
+    moodStabilityThresholdRef.current = moodStabilityThreshold;
+  }, [moodStabilityThreshold]);
+  
+  // Handle emotion detection with stability threshold
   const handleEmotionDetected = useCallback((emotion, confidence) => {
-    // Update detected emotion
+    // Update detected emotion immediately (for UI display)
     setDetectedEmotion(emotion);
     
-    // Change music ONLY if in dynamic mode and audio is initialized
-    // Using refs to avoid stale closures
-    if (isAudioInitializedRef.current && 
-        musicModeRef.current === 'dynamic' && 
-        audioEngineRef.current) {
-      audioEngineRef.current.changeEmotion(emotion);
+    // If emotion has changed, reset the timer
+    if (emotion !== detectedEmotionRef.current) {
+      lastEmotionChangeTimeRef.current = Date.now();
+      return;
+    }
+    
+    // Calculate how long this emotion has been stable
+    const now = Date.now();
+    const elapsedTimeSeconds = (now - lastEmotionChangeTimeRef.current) / 1000;
+    
+    // Only change music if emotion has been stable for the threshold time
+    // Use the ref value to always have the latest threshold
+    if (elapsedTimeSeconds >= moodStabilityThresholdRef.current) {
+      // Update stable emotion
+      setStableEmotion(emotion);
+      
+      // Change music ONLY if in dynamic mode and audio is initialized
+      if (isAudioInitializedRef.current && 
+          musicModeRef.current === 'dynamic' && 
+          audioEngineRef.current) {
+        audioEngineRef.current.changeEmotion(emotion);
+      }
     }
   }, []); // No dependencies needed as we're using refs
   
@@ -113,13 +138,13 @@ function App() {
   
   // Effect to handle audio initialization and emotion changes
   useEffect(() => {
-    // If audio was just initialized and we're in dynamic mode, update to current emotion
+    // If audio was just initialized and we're in dynamic mode, update to current stable emotion
     if (isAudioInitialized && musicMode === 'dynamic' && audioEngineRef.current) {
-      audioEngineRef.current.changeEmotion(detectedEmotion);
+      audioEngineRef.current.changeEmotion(stableEmotion);
     } else if (isAudioInitialized && musicMode === 'manual' && audioEngineRef.current) {
       audioEngineRef.current.changeEmotion(manualEmotion);
     }
-  }, [isAudioInitialized, musicMode, detectedEmotion, manualEmotion]);
+  }, [isAudioInitialized, musicMode, stableEmotion, manualEmotion]);
   
   // Initialize audio
   const handleStartButton = async () => {
@@ -133,7 +158,7 @@ function App() {
           
           // Immediately change to the current emotion if in dynamic mode
           if (musicMode === 'dynamic') {
-            audioEngineRef.current.changeEmotion(detectedEmotion);
+            audioEngineRef.current.changeEmotion(stableEmotion);
           } else if (musicMode === 'manual') {
             audioEngineRef.current.changeEmotion(manualEmotion);
           }
@@ -149,6 +174,11 @@ function App() {
     setVolume(Number(e.target.value));
   };
   
+  // Handle mood stability threshold change
+  const handleMoodStabilityChange = (e) => {
+    setMoodStabilityThreshold(Number(e.target.value));
+  };
+  
   // Handle music mode change
   const handleModeChange = (mode) => {
     setMusicMode(mode);
@@ -159,8 +189,8 @@ function App() {
       if (mode === 'manual') {
         audioEngineRef.current.changeEmotion(manualEmotion);
       } else {
-        // If switching to dynamic mode, use the currently detected emotion
-        audioEngineRef.current.changeEmotion(detectedEmotion);
+        // If switching to dynamic mode, use the currently stable emotion
+        audioEngineRef.current.changeEmotion(stableEmotion);
       }
     }
   };
@@ -252,6 +282,11 @@ function App() {
                 }}
               >
                 {emotionNamesDutch[detectedEmotion]}
+                {musicMode === 'dynamic' && stableEmotion !== detectedEmotion && (
+                  <div style={{ fontSize: '10px', marginTop: '4px' }}>
+                    Stabiliseren...
+                  </div>
+                )}
               </div>
               
               <div className="instructions">
@@ -367,6 +402,32 @@ function App() {
                       {emotionNamesDutch[emotion]}
                     </button>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {/* New: Mood stability threshold slider */}
+            {musicMode === 'dynamic' && (
+              <div style={{ marginBottom: '15px' }}>
+                <div style={{ fontSize: '12px', marginBottom: '5px', color: '#ddd' }}>
+                  Stabiliteitsdrempel:
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="5"
+                    step="0.5"
+                    value={moodStabilityThreshold}
+                    onChange={handleMoodStabilityChange}
+                    style={{ flex: 1 }}
+                  />
+                  <span style={{ fontSize: '12px', color: '#ddd', minWidth: '40px', textAlign: 'right' }}>
+                    {moodStabilityThreshold}s
+                  </span>
+                </div>
+                <div style={{ fontSize: '10px', color: '#999', marginTop: '3px', textAlign: 'center' }}>
+                  Tijd nodig voor stemmingswisseling
                 </div>
               </div>
             )}
