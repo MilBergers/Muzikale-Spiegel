@@ -214,7 +214,10 @@ function App() {
     <div className="App">
       <header className="App-header">
         <h1>De Muzikale Spiegel</h1>
-        
+        <div className="instructions">
+                <p>Je gezichtsuitdrukking bepaalt de muziek!</p>
+                <p>Maak duidelijke expressies voor de beste detectie.</p>
+        </div>
         {!isModelLoaded ? (
           <div className="loading">Gezichtsdetectiemodellen laden...</div>
         ) : (
@@ -287,11 +290,6 @@ function App() {
                     Stabiliseren...
                   </div>
                 )}
-              </div>
-              
-              <div className="instructions">
-                <p>Je gezichtsuitdrukking bepaalt de muziek!</p>
-                <p>Maak duidelijke expressies voor de beste detectie.</p>
               </div>
             </div>
           </>
