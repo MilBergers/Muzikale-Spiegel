@@ -9,7 +9,7 @@ export const emotionColors = {
     neutral: '#A9A9A9'    // Dark Gray
   };
   
-  // Translate emotion names to Dutch
+  // Translate emotion names to Dutch for UI display
   export const emotionNamesDutch = {
     happy: 'BLIJ',
     sad: 'VERDRIETIG',

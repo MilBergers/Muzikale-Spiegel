@@ -2,22 +2,27 @@ import * as Tone from 'tone';
 import { emotionMusicData, emotionScaleNames } from './constants';
 
 export default class AudioEngine {
-  constructor(onAudioParamChange) {
+  constructor(onAudioParamChange, onBeat) {
     this.instruments = {};
     this.effects = {};
     this.activeSequences = [];
     this.masterVolume = null;
+    this.musicVolume = null; // New: separate volume for music fade
     this.currentEmotion = 'neutral';
     this.isInitialized = false;
     this.onAudioParamChange = onAudioParamChange;
+    this.onBeat = onBeat; // New: callback for beat events
+    this.beatCount = 0; // Track beat count
     
     // Bind methods to ensure 'this' context is preserved
     this.initialize = this.initialize.bind(this);
     this.setVolume = this.setVolume.bind(this);
+    this.setMusicVolume = this.setMusicVolume.bind(this);
     this.stopAllSequences = this.stopAllSequences.bind(this);
     this.startEmotionMusic = this.startEmotionMusic.bind(this);
     this.changeEmotion = this.changeEmotion.bind(this);
     this.dispose = this.dispose.bind(this);
+    this.handleBeat = this.handleBeat.bind(this);
   }
 
   // Initialize audio system
@@ -26,8 +31,11 @@ export default class AudioEngine {
       // Start the audio context
       await Tone.start();
       
-      // Create master volume
-      this.masterVolume = new Tone.Volume(volume).toDestination();
+      // Create music volume (for fade in/out)
+      this.musicVolume = new Tone.Volume(0).toDestination();
+      
+      // Create master volume (for user control)
+      this.masterVolume = new Tone.Volume(volume).connect(this.musicVolume);
       
       // Create effects
       this.effects = {
@@ -177,10 +185,21 @@ export default class AudioEngine {
     }
   }
 
-  // Set volume
+  // Set master volume (user control)
   setVolume(value) {
     if (this.masterVolume) {
       this.masterVolume.volume.value = value;
+    }
+  }
+
+  // Set music volume (for fade in/out when face detected/lost)
+  setMusicVolume(value) {
+    if (this.musicVolume) {
+      // Convert linear 0-1 to decibels with smooth transition
+      const dbValue = value <= 0.02 ? -60 : Math.log10(value) * 20;
+      // Use longer fade time when fading out (to 2%), shorter when fading in
+      const fadeTime = value <= 0.02 ? 2.0 : 0.5;
+      this.musicVolume.volume.rampTo(dbValue, fadeTime);
     }
   }
 
@@ -212,8 +231,8 @@ export default class AudioEngine {
       // Get the music data for this emotion
       const musicData = emotionMusicData[emotion] || emotionMusicData.neutral;
       
-      // Set the tempo
-      Tone.Transport.bpm.value = musicData.tempo;
+      // Set the tempo with smooth transition
+      Tone.Transport.bpm.rampTo(musicData.tempo, 2);
       
       // Update effect settings
       if (musicData.effects) {
@@ -261,52 +280,65 @@ export default class AudioEngine {
       // Stop all currently playing sequences
       this.stopAllSequences();
       
-      // Create lead melody sequence
+      // Create lead melody sequence with beat triggers
       const leadSequence = new Tone.Sequence((time, idx) => {
         if (idx !== null) {
           const note = musicData.scale[idx % musicData.scale.length];
-          this.instruments.lead.triggerAttackRelease(note, "8n", time);
+          const velocity = this.getEmotionalVelocity(emotion);
+          this.instruments.lead.triggerAttackRelease(note, "8n", time, velocity);
+          
+          // Trigger particle beat on melody notes
+          if (idx % 2 === 0) { // Every other note
+            Tone.Draw.schedule(() => {
+              this.handleBeat('melody', velocity);
+            }, time);
+          }
         }
       }, melodyPattern, "8n");
       
       // Create bass sequence
       const bassSequence = new Tone.Sequence((time, note) => {
         if (note !== null) {
-          this.instruments.bass.triggerAttackRelease(note, "4n", time);
+          const velocity = this.getEmotionalVelocity(emotion, 'bass');
+          this.instruments.bass.triggerAttackRelease(note, "4n", time, velocity);
         }
       }, musicData.bassNotes, "2n");
       
       // Create chord/pad sequence
       const padSequence = new Tone.Sequence((time, chord) => {
         if (chord !== null) {
-          this.instruments.pad.triggerAttackRelease(chord, "2n", time);
+          const velocity = this.getEmotionalVelocity(emotion, 'pad');
+          this.instruments.pad.triggerAttackRelease(chord, "2n", time, velocity);
         }
       }, [...musicData.chords, null], "1n");
       
       // Create percussion patterns based on emotion
-      const kickPattern = emotion === 'angry' ? 
-        ['C2', null, 'C2', null, 'C2', null, 'C2', null] : 
-        emotion === 'happy' ? 
-        ['C2', null, null, null, 'C2', null, null, null] :
-        ['C2', null, null, null, 'C2', null, null, null];
-          
-      const snarePattern = emotion === 'angry' ? 
-        [null, 0.7, null, 0.7, null, 0.7, null, 0.7] : 
-        emotion === 'happy' ? 
-        [null, null, 0.7, null, null, null, 0.7, null] :
-        [null, null, 0.7, null, null, null, 0.5, null];
+      const kickPattern = this.getEmotionalKickPattern(emotion);
+      const snarePattern = this.getEmotionalSnarePattern(emotion);
       
-      // Create kick sequence
+      // Create kick sequence with beat triggers
       const kickSequence = new Tone.Sequence((time, note) => {
         if (note !== null) {
-          this.instruments.kick.triggerAttackRelease(note, "8n", time);
+          const velocity = this.getEmotionalVelocity(emotion, 'kick');
+          this.instruments.kick.triggerAttackRelease(note, "8n", time, velocity);
+          
+          // Trigger strong particle beat on kick
+          Tone.Draw.schedule(() => {
+            this.handleBeat('kick', velocity * 1.5);
+          }, time);
         }
       }, kickPattern, "8n");
       
-      // Create snare sequence
+      // Create snare sequence with beat triggers
       const snareSequence = new Tone.Sequence((time, velocity) => {
         if (velocity > 0) {
-          this.instruments.snare.triggerAttackRelease("16n", time, velocity);
+          const adjustedVelocity = velocity * this.getEmotionalVelocity(emotion, 'snare');
+          this.instruments.snare.triggerAttackRelease("16n", time, adjustedVelocity);
+          
+          // Trigger particle beat on snare
+          Tone.Draw.schedule(() => {
+            this.handleBeat('snare', adjustedVelocity);
+          }, time);
         }
       }, snarePattern, "8n");
       
@@ -318,9 +350,10 @@ export default class AudioEngine {
         seq.start(0);
       });
       
-      // Play a chord to signal the change
+      // Play a chord to signal the change with emotional intensity
       const chordNotes = musicData.chords[0] || ['C4', 'E4', 'G4'];
-      this.instruments.lead.triggerAttackRelease(chordNotes, '4n');
+      const chordVelocity = this.getEmotionalVelocity(emotion);
+      this.instruments.lead.triggerAttackRelease(chordNotes, '4n', undefined, chordVelocity);
       
       // Update UI parameters through callback
       if (this.onAudioParamChange) {
@@ -335,6 +368,51 @@ export default class AudioEngine {
     } catch (error) {
       console.error('Fout bij het starten van emotie muziek:', error);
     }
+  }
+
+  // Get emotional velocity for different instruments
+  getEmotionalVelocity(emotion, instrument = 'lead') {
+    const baseVelocities = {
+      happy: { lead: 0.8, bass: 0.7, pad: 0.6, kick: 0.8, snare: 0.7 },
+      sad: { lead: 0.4, bass: 0.5, pad: 0.8, kick: 0.4, snare: 0.3 },
+      angry: { lead: 0.9, bass: 0.8, pad: 0.5, kick: 0.9, snare: 0.9 },
+      fearful: { lead: 0.3, bass: 0.4, pad: 0.7, kick: 0.3, snare: 0.4 },
+      disgusted: { lead: 0.6, bass: 0.6, pad: 0.4, kick: 0.5, snare: 0.6 },
+      surprised: { lead: 0.7, bass: 0.6, pad: 0.5, kick: 0.7, snare: 0.8 },
+      neutral: { lead: 0.6, bass: 0.6, pad: 0.6, kick: 0.6, snare: 0.6 }
+    };
+    
+    return baseVelocities[emotion]?.[instrument] || 0.6;
+  }
+
+  // Get emotional kick patterns
+  getEmotionalKickPattern(emotion) {
+    const patterns = {
+      angry: ['C2', null, 'C2', null, 'C2', null, 'C2', null],
+      happy: ['C2', null, null, null, 'C2', null, null, null],
+      sad: ['C2', null, null, null, null, null, 'C2', null],
+      fearful: ['C2', null, null, null, null, null, null, null],
+      surprised: ['C2', null, 'C2', null, null, 'C2', null, null],
+      disgusted: ['C2', null, null, 'C2', null, null, null, null],
+      neutral: ['C2', null, null, null, 'C2', null, null, null]
+    };
+    
+    return patterns[emotion] || patterns.neutral;
+  }
+
+  // Get emotional snare patterns
+  getEmotionalSnarePattern(emotion) {
+    const patterns = {
+      angry: [null, 0.7, null, 0.7, null, 0.7, null, 0.7],
+      happy: [null, null, 0.7, null, null, null, 0.7, null],
+      sad: [null, null, 0.4, null, null, null, null, null],
+      fearful: [null, null, 0.3, null, null, null, 0.2, null],
+      surprised: [null, 0.6, null, null, 0.6, null, null, 0.6],
+      disgusted: [null, null, 0.5, null, null, 0.4, null, null],
+      neutral: [null, null, 0.5, null, null, null, 0.5, null]
+    };
+    
+    return patterns[emotion] || patterns.neutral;
   }
 
   // Change the current emotion
@@ -354,6 +432,19 @@ export default class AudioEngine {
       this.startEmotionMusic(emotion);
     } catch (error) {
       console.error('Fout bij het wijzigen van emotie:', error);
+    }
+  }
+
+  // Handle beat events and trigger particle animations
+  handleBeat(beatType = 'kick', intensity = 1) {
+    this.beatCount++;
+    if (this.onBeat) {
+      this.onBeat({
+        type: beatType,
+        intensity: intensity,
+        count: this.beatCount,
+        emotion: this.currentEmotion
+      });
     }
   }
 
@@ -378,6 +469,10 @@ export default class AudioEngine {
     
     if (this.masterVolume) {
       this.masterVolume.dispose();
+    }
+    
+    if (this.musicVolume) {
+      this.musicVolume.dispose();
     }
     
     // Stop transport

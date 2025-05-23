@@ -12,19 +12,27 @@ function App() {
   // State hooks
   const [isModelLoaded, setIsModelLoaded] = useState(false);
   const [detectedEmotion, setDetectedEmotion] = useState('neutral');
-  const [stableEmotion, setStableEmotion] = useState('neutral'); // New: emotion that's been stable for threshold time
+  const [stableEmotion, setStableEmotion] = useState('neutral');
   const [isAudioInitialized, setIsAudioInitialized] = useState(false);
-  const [volume, setVolume] = useState(-15); // Volume in decibels (dB)
-  const [musicMode, setMusicMode] = useState('dynamic'); // 'dynamic' or 'manual'
+  const [volume, setVolume] = useState(-15);
+  const [musicMode, setMusicMode] = useState('dynamic');
   const [manualEmotion, setManualEmotion] = useState('neutral');
   const [showDebugMenu, setShowDebugMenu] = useState(false);
-  const [moodStabilityThreshold, setMoodStabilityThreshold] = useState(1); // Changed: Default is now 1 second
+  const [moodStabilityThreshold, setMoodStabilityThreshold] = useState(1);
   const [audioParams, setAudioParams] = useState({
     tempo: 100,
     scale: 'major',
     reverb: 0.5,
     instrument: 'synth'
   });
+  
+  // New states for enhanced features
+  const [faceDetected, setFaceDetected] = useState(false);
+  const [showClickToStart, setShowClickToStart] = useState(true);
+  const [musicVolume, setMusicVolume] = useState(1); // For fade in/out
+  const [particleTriggers, setParticleTriggers] = useState([]); // For beat-triggered animations
+  const [stabilizationProgress, setStabilizationProgress] = useState(0); // Track stabilization progress
+  const [multipleFacesDetected, setMultipleFacesDetected] = useState(false); // Track multiple faces
   
   // Module refs
   const audioEngineRef = useRef(null);
@@ -34,13 +42,37 @@ function App() {
   const isAudioInitializedRef = useRef(false);
   const musicModeRef = useRef('dynamic');
   const detectedEmotionRef = useRef('neutral');
-  const lastEmotionChangeTimeRef = useRef(Date.now()); // New: track when emotion changed
-  const moodStabilityThresholdRef = useRef(1); // Track stability threshold in a ref
+  const lastEmotionChangeTimeRef = useRef(Date.now());
+  const moodStabilityThresholdRef = useRef(1);
+  const faceDetectedRef = useRef(false);
+  const lastFaceDetectionTimeRef = useRef(Date.now());
+  const fadeTimeoutRef = useRef(null);
   
+  // Handle beat events from audio engine
+  const handleBeat = useCallback((beatData) => {
+    const { type, intensity, count, emotion } = beatData;
+    
+    // Add a new trigger that will affect specific particles
+    const newTrigger = {
+      id: Date.now() + Math.random(),
+      type,
+      intensity,
+      timestamp: Date.now(),
+      emotion,
+      particleIndex: count % 12 // Rotate through particles
+    };
+    
+    setParticleTriggers(prev => {
+      // Keep only recent triggers (last 2 seconds)
+      const recent = prev.filter(trigger => Date.now() - trigger.timestamp < 2000);
+      return [...recent, newTrigger];
+    });
+  }, []);
+
   // Initialize modules on component mount
   useEffect(() => {
-    // Create audio engine with param change callback
-    audioEngineRef.current = new AudioEngine(setAudioParams);
+    // Create audio engine with param change callback and beat callback
+    audioEngineRef.current = new AudioEngine(setAudioParams, handleBeat);
     
     // Create face detection module with emotion callback
     faceDetectionRef.current = new FaceDetection(handleEmotionDetected);
@@ -64,6 +96,9 @@ function App() {
       if (faceDetectionRef.current) {
         faceDetectionRef.current.stopDetection();
       }
+      if (fadeTimeoutRef.current) {
+        clearTimeout(fadeTimeoutRef.current);
+      }
     };
   }, []);
   
@@ -80,13 +115,52 @@ function App() {
     detectedEmotionRef.current = detectedEmotion;
   }, [detectedEmotion]);
   
-  // Update moodStabilityThresholdRef when the state changes
   useEffect(() => {
     moodStabilityThresholdRef.current = moodStabilityThreshold;
   }, [moodStabilityThreshold]);
   
-  // Handle emotion detection with stability threshold
-  const handleEmotionDetected = useCallback((emotion, confidence) => {
+  useEffect(() => {
+    faceDetectedRef.current = faceDetected;
+  }, [faceDetected]);
+  
+  // Handle music fade in/out based on face detection
+  useEffect(() => {
+    if (!isAudioInitialized || !audioEngineRef.current) return;
+    
+    if (faceDetected) {
+      // Face detected - fade in music immediately
+      audioEngineRef.current.setMusicVolume(1);
+      setMusicVolume(1);
+      
+      // Clear any pending fade out
+      if (fadeTimeoutRef.current) {
+        clearTimeout(fadeTimeoutRef.current);
+        fadeTimeoutRef.current = null;
+      }
+    } else {
+      // No face detected - start slow fade out immediately
+      if (fadeTimeoutRef.current) {
+        clearTimeout(fadeTimeoutRef.current);
+      }
+      
+      // Start fading immediately (no delay)
+      if (audioEngineRef.current) {
+        audioEngineRef.current.setMusicVolume(0.02);
+        setMusicVolume(0.02);
+      }
+    }
+  }, [faceDetected, isAudioInitialized]);
+  
+  // Handle emotion detection with stability threshold and face detection tracking
+  const handleEmotionDetected = useCallback((emotion, confidence, hasDetection = true) => {
+    // Update face detection status
+    setFaceDetected(hasDetection);
+    lastFaceDetectionTimeRef.current = Date.now();
+    
+    if (!hasDetection) {
+      return; // Don't process emotion if no face detected
+    }
+    
     // Update detected emotion immediately (for UI display)
     setDetectedEmotion(emotion);
     
@@ -101,7 +175,6 @@ function App() {
     const elapsedTimeSeconds = (now - lastEmotionChangeTimeRef.current) / 1000;
     
     // Only change music if emotion has been stable for the threshold time
-    // Use the ref value to always have the latest threshold
     if (elapsedTimeSeconds >= moodStabilityThresholdRef.current) {
       // Update stable emotion
       setStableEmotion(emotion);
@@ -113,7 +186,28 @@ function App() {
         audioEngineRef.current.changeEmotion(emotion);
       }
     }
-  }, []); // No dependencies needed as we're using refs
+  }, []);
+  
+  // Monitor face detection timeout and multiple faces
+  useEffect(() => {
+    const checkFaceStatus = setInterval(() => {
+      const now = Date.now();
+      const timeSinceLastDetection = (now - lastFaceDetectionTimeRef.current) / 1000;
+      
+      // If no face detected for more than 1 second, update state
+      if (timeSinceLastDetection > 1 && faceDetectedRef.current) {
+        setFaceDetected(false);
+      }
+      
+      // Check for multiple faces if face detection is active
+      if (faceDetectionRef.current) {
+        const hasMultiple = faceDetectionRef.current.hasMultipleFaces();
+        setMultipleFacesDetected(hasMultiple);
+      }
+    }, 500);
+    
+    return () => clearInterval(checkFaceStatus);
+  }, []);
   
   // Start video when models are loaded
   useEffect(() => {
@@ -138,7 +232,6 @@ function App() {
   
   // Effect to handle audio initialization and emotion changes
   useEffect(() => {
-    // If audio was just initialized and we're in dynamic mode, update to current stable emotion
     if (isAudioInitialized && musicMode === 'dynamic' && audioEngineRef.current) {
       audioEngineRef.current.changeEmotion(stableEmotion);
     } else if (isAudioInitialized && musicMode === 'manual' && audioEngineRef.current) {
@@ -146,15 +239,15 @@ function App() {
     }
   }, [isAudioInitialized, musicMode, stableEmotion, manualEmotion]);
   
-  // Initialize audio
-  const handleStartButton = async () => {
-    if (!isAudioInitialized && audioEngineRef.current) {
+  // Auto-initialize audio when user clicks anywhere (improved flow)
+  const handleAnyClick = async () => {
+    if (!isAudioInitialized && audioEngineRef.current && showClickToStart) {
       try {
         const success = await audioEngineRef.current.initialize(volume);
         
-        // If initialization was successful
         if (success) {
           setIsAudioInitialized(true);
+          setShowClickToStart(false);
           
           // Immediately change to the current emotion if in dynamic mode
           if (musicMode === 'dynamic') {
@@ -164,7 +257,7 @@ function App() {
           }
         }
       } catch (error) {
-        console.error('Fout in start knop handler:', error);
+        console.error('Fout bij audio initialisatie:', error);
       }
     }
   };
@@ -183,13 +276,10 @@ function App() {
   const handleModeChange = (mode) => {
     setMusicMode(mode);
     
-    // Only change if audio is initialized
     if (isAudioInitialized && audioEngineRef.current) {
-      // If switching to manual mode, use the manually selected emotion
       if (mode === 'manual') {
         audioEngineRef.current.changeEmotion(manualEmotion);
       } else {
-        // If switching to dynamic mode, use the currently stable emotion
         audioEngineRef.current.changeEmotion(stableEmotion);
       }
     }
@@ -199,7 +289,6 @@ function App() {
   const handleManualEmotionChange = (emotion) => {
     setManualEmotion(emotion);
     
-    // Only change the music if in manual mode and audio is initialized
     if (musicMode === 'manual' && isAudioInitialized && audioEngineRef.current) {
       audioEngineRef.current.changeEmotion(emotion);
     }
@@ -209,15 +298,123 @@ function App() {
   const toggleDebugMenu = () => {
     setShowDebugMenu(!showDebugMenu);
   };
+
+  // Compute which emotion to display based on mode
+  const displayEmotion = musicMode === 'manual' ? manualEmotion : stableEmotion;
   
   return (
-    <div className="App">
+    <div className="App" onClick={handleAnyClick}>
+      {/* Animated background */}
+      <div 
+        className="animated-background"
+        style={{
+          background: `radial-gradient(circle at 50% 50%, ${emotionColors[displayEmotion]}33 0%, transparent 70%)`,
+          opacity: musicVolume * 0.8
+        }}
+      />
+      
+      {/* Floating particles */}
+      <div className="particles-container">
+        {[...Array(12)].map((_, i) => {
+          // Create unique properties for each particle
+          const baseDelay = (i * 0.347) % 2.5;
+          let baseOpacity = faceDetected || musicMode === 'manual' ? 
+            0.6 + ((i * 0.173) % 0.4) : 0.3;
+          
+          // Dim particles when emotion is stabilizing (not yet stable)
+          const isStabilizing = musicMode === 'dynamic' && stableEmotion !== detectedEmotion && faceDetected;
+          if (isStabilizing) {
+            baseOpacity *= 0.6; // Reduce opacity during stabilization
+          }
+          
+          // Check if this particle should be triggered by recent beats
+          const recentTrigger = particleTriggers.find(trigger => 
+            trigger.particleIndex === i && Date.now() - trigger.timestamp < 500
+          );
+          
+          // Calculate unique movement parameters for each particle
+          const speedMultiplier = 0.7 + (i * 0.234) % 0.6; // 0.7-1.3x speed
+          const directionOffset = i * 30; // 0-330 degrees
+          const sizeVariation = 0.8 + (i * 0.156) % 0.4; // 0.8-1.2x size
+          
+          let particleStyle = {
+            animationDelay: `${baseDelay}s`,
+            opacity: baseOpacity,
+            animationDuration: `${4 * speedMultiplier}s`,
+            transform: `rotate(${directionOffset}deg) scale(${sizeVariation})`,
+            '--beat-intensity': recentTrigger ? recentTrigger.intensity : 0,
+            '--particle-index': i
+          };
+          
+          // Add stabilization visual effect
+          if (isStabilizing) {
+            particleStyle.filter = 'blur(1px) brightness(0.8)';
+            particleStyle.animationDuration = `${6 * speedMultiplier}s`; // Slower during stabilization
+          }
+          
+          // Add beat-triggered effects
+          if (recentTrigger) {
+            const beatMultiplier = recentTrigger.intensity * 2;
+            particleStyle.animationDuration = `${2 / beatMultiplier}s`;
+            particleStyle.opacity = Math.min(1, baseOpacity * (1 + beatMultiplier));
+            
+            if (recentTrigger.type === 'kick') {
+              particleStyle.filter = `brightness(${1 + beatMultiplier}) saturate(${1 + beatMultiplier * 0.5})`;
+            } else if (recentTrigger.type === 'snare') {
+              particleStyle.transform += ` scale(${1 + beatMultiplier * 0.5})`;
+            } else if (recentTrigger.type === 'melody') {
+              particleStyle.boxShadow = `0 0 ${20 + beatMultiplier * 20}px currentColor`;
+            }
+          }
+          
+          return (
+            <div
+              key={i}
+              className={`particle emotion-${displayEmotion} particle-${i}`}
+              style={particleStyle}
+            />
+          );
+        })}
+      </div>
+      
       <header className="App-header">
-        <h1>De Muzikale Spiegel</h1>
+        <h1 style={{ 
+          textShadow: `0 0 20px ${emotionColors[displayEmotion]}66`,
+          transition: 'text-shadow 0.5s ease'
+        }}>
+          De Muzikale Spiegel
+        </h1>
+        
+        {/* Click to start overlay */}
+        {showClickToStart && (
+          <div className="click-to-start-overlay">
+            <div className="click-prompt">
+              <h2>🎵 Klik om te beginnen 🎵</h2>
+              <p>Je gezichtsuitdrukking bepaalt de muziek!</p>
+            </div>
+          </div>
+        )}
+        
         <div className="instructions">
-                <p>Je gezichtsuitdrukking bepaalt de muziek!</p>
-                <p>Maak duidelijke expressies voor de beste detectie.</p>
+          <p>Je gezichtsuitdrukking bepaalt de muziek!</p>
+          <p>Houd een uitdrukking vast - muziek en visuals veranderen na {moodStabilityThreshold}s</p>
+          {!faceDetected && isAudioInitialized && musicMode === 'dynamic' && (
+            <p style={{ color: '#ff6b6b', fontWeight: 'bold' }}>
+              📷 Geen gezicht gedetecteerd - muziek vervaagt...
+            </p>
+          )}
+          {multipleFacesDetected && faceDetected && (
+            <p style={{ color: '#ffa500', fontWeight: 'bold' }}>
+              ⚠️ Meerdere gezichten gedetecteerd - alleen het grootste wordt gebruikt
+            </p>
+          )}
+          {musicMode === 'manual' && (
+            <p style={{ color: '#4CAF50', fontWeight: 'bold' }}>
+              🎛️ Handmatige bediening actief - gebruik het debug menu
+            </p>
+          )}
         </div>
+        
         {!isModelLoaded ? (
           <div className="loading">Gezichtsdetectiemodellen laden...</div>
         ) : (
@@ -230,64 +427,105 @@ function App() {
                 autoPlay
                 muted
                 onPlay={handleVideoPlay}
+                style={{
+                  filter: `hue-rotate(${displayEmotion === 'angry' ? '320deg' : 
+                                      displayEmotion === 'sad' ? '220deg' :
+                                      displayEmotion === 'happy' ? '80deg' : 
+                                      displayEmotion === 'fearful' ? '280deg' :
+                                      displayEmotion === 'disgusted' ? '120deg' :
+                                      displayEmotion === 'surprised' ? '300deg' : '0deg'}) saturate(${displayEmotion !== 'neutral' ? '1.5' : '1'}) brightness(${displayEmotion === 'happy' ? '1.2' : displayEmotion === 'sad' ? '0.8' : '1'})`,
+                  transition: 'filter 0.5s ease'
+                }}
               />
               <canvas ref={canvasRef} className="face-canvas" />
+              
+              {/* Face detection indicator */}
+              <div className={`face-indicator ${faceDetected ? 'detected' : 'not-detected'}`} style={{
+                opacity: musicMode === 'manual' ? 0.5 : 1,
+                color: multipleFacesDetected ? '#ffa500' : 'inherit'
+              }}>
+                {faceDetected ? (multipleFacesDetected ? '👥' : '😊') : '👤'}
+              </div>
             </div>
             
             <div className="controls">
-              {!isAudioInitialized ? (
-                <button 
-                  onClick={handleStartButton}
-                  className="start-button"
-                >
-                  Start Muziekervaring
-                </button>
-              ) : (
-                <>
-                  <div className="control-panel">
-                    <div className="volume-control">
-                      <label htmlFor="volume">Volume:</label>
-                      <input
-                        id="volume"
-                        type="range"
-                        min="-60"
-                        max="0"
-                        step="1"
-                        value={volume}
-                        onChange={handleVolumeChange}
-                        className="volume-slider"
-                      />
-                      <span className="volume-label">{Math.round((60 + Number(volume)) / 0.6)}%</span>
+              {isAudioInitialized && (
+                <div className="control-panel">
+                  <div className="volume-control">
+                    <label htmlFor="volume">Volume:</label>
+                    <input
+                      id="volume"
+                      type="range"
+                      min="-60"
+                      max="0"
+                      step="1"
+                      value={volume}
+                      onChange={handleVolumeChange}
+                      className="volume-slider"
+                    />
+                    <span className="volume-label">{Math.round((60 + Number(volume)) / 0.6)}%</span>
+                  </div>
+                  
+                  <div className="music-info">
+                    <div className="music-param">
+                      <span className="param-label">Tempo:</span>
+                      <span className="param-value">{audioParams.tempo} BPM</span>
                     </div>
-                    
-                    <div className="music-info">
-                      <div className="music-param">
-                        <span className="param-label">Tempo:</span>
-                        <span className="param-value">{audioParams.tempo} BPM</span>
-                      </div>
-                      <div className="music-param">
-                        <span className="param-label">Toonladder:</span>
-                        <span className="param-value">{audioParams.scale}</span>
-                      </div>
-                      <div className="music-param">
-                        <span className="param-label">Galm:</span>
-                        <span className="param-value">{Math.round(audioParams.reverb * 100)}%</span>
-                      </div>
+                    <div className="music-param">
+                      <span className="param-label">Toonladder:</span>
+                      <span className="param-value">{audioParams.scale}</span>
+                    </div>
+                    <div className="music-param">
+                      <span className="param-label">Galm:</span>
+                      <span className="param-value">{Math.round(audioParams.reverb * 100)}%</span>
+                    </div>
+                    <div className="music-param">
+                      <span className="param-label">Muziek:</span>
+                      <span className="param-value" style={{
+                        color: musicVolume > 0.1 ? '#4CAF50' : '#ff6b6b'
+                      }}>
+                        {musicVolume > 0.1 ? 'Actief' : 'Vervaagd'}
+                      </span>
                     </div>
                   </div>
-                </>
+                </div>
               )}
               
               <div 
-                className="emotion-display"
+                className="emotion-display pulsing"
                 style={{
-                  backgroundColor: emotionColors[detectedEmotion] || emotionColors.neutral
+                  backgroundColor: emotionColors[displayEmotion] || emotionColors.neutral,
+                  transform: `scale(${faceDetected || musicMode === 'manual' ? 1 + (musicVolume * 0.1) : 0.9})`,
+                  boxShadow: `0 0 ${faceDetected || musicMode === 'manual' ? 30 : 10}px ${emotionColors[displayEmotion]}66`
                 }}
               >
-                {emotionNamesDutch[detectedEmotion]}
-                {musicMode === 'dynamic' && stableEmotion !== detectedEmotion && (
+                {emotionNamesDutch[displayEmotion]}
+                {musicMode === 'dynamic' && stableEmotion !== detectedEmotion && faceDetected && (
+                  <>
+                    <div style={{ fontSize: '10px', marginTop: '4px', color: 'rgba(255,255,255,0.8)' }}>
+                      Detecteert: {emotionNamesDutch[detectedEmotion]} → Stabiliseren...
+                    </div>
+                    <div style={{ 
+                      width: '100%', 
+                      height: '3px', 
+                      backgroundColor: 'rgba(255,255,255,0.2)', 
+                      borderRadius: '2px',
+                      marginTop: '5px',
+                      overflow: 'hidden'
+                    }}>
+                      <div style={{
+                        width: `${stabilizationProgress * 100}%`,
+                        height: '100%',
+                        backgroundColor: emotionColors[detectedEmotion],
+                        transition: 'width 0.1s ease',
+                        borderRadius: '2px'
+                      }} />
+                    </div>
+                  </>
+                )}
+                {musicMode === 'manual' && (
                   <div style={{ fontSize: '10px', marginTop: '4px' }}>
-                    Stabiliseren...
+                    Handmatig
                   </div>
                 )}
               </div>
@@ -300,7 +538,7 @@ function App() {
           <br />Er worden geen videogegevens opgeslagen of verzonden.
         </div>
         
-        {/* Debug button in bottom right */}
+        {/* Debug button */}
         <button 
           className="debug-toggle-button"
           onClick={toggleDebugMenu}
@@ -336,6 +574,7 @@ function App() {
               width: '250px',
               boxShadow: '0 0 10px rgba(0, 0, 0, 0.5)'
             }}
+            onClick={(e) => e.stopPropagation()}
           >
             <div style={{ marginBottom: '15px', borderBottom: '1px solid #555', paddingBottom: '10px' }}>
               <h3 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#fff' }}>Ontwikkelaarsmenu</h3>
@@ -404,7 +643,6 @@ function App() {
               </div>
             )}
 
-            {/* New: Mood stability threshold slider */}
             {musicMode === 'dynamic' && (
               <div style={{ marginBottom: '15px' }}>
                 <div style={{ fontSize: '12px', marginBottom: '5px', color: '#ddd' }}>
@@ -431,7 +669,10 @@ function App() {
             )}
 
             <div style={{ fontSize: '11px', color: '#999', marginTop: '10px', textAlign: 'center' }}>
-              Alleen voor ontwikkelaars
+              Face: {faceDetected ? '✅' : '❌'} | Volume: {Math.round(musicVolume * 100)}%
+              {multipleFacesDetected && ' | ⚠️ Multiple'}
+              <br />
+              Live: {emotionNamesDutch[detectedEmotion]} | Stable: {emotionNamesDutch[stableEmotion]} | Active: {emotionNamesDutch[displayEmotion]}
             </div>
           </div>
         )}
