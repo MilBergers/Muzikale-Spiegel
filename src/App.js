@@ -500,29 +500,7 @@ function App() {
                 }}
               >
                 {emotionNamesDutch[displayEmotion]}
-                {musicMode === 'dynamic' && stableEmotion !== detectedEmotion && faceDetected && (
-                  <>
-                    <div style={{ fontSize: '10px', marginTop: '4px', color: 'rgba(255,255,255,0.8)' }}>
-                      Detecteert: {emotionNamesDutch[detectedEmotion]} → Stabiliseren...
-                    </div>
-                    <div style={{ 
-                      width: '100%', 
-                      height: '3px', 
-                      backgroundColor: 'rgba(255,255,255,0.2)', 
-                      borderRadius: '2px',
-                      marginTop: '5px',
-                      overflow: 'hidden'
-                    }}>
-                      <div style={{
-                        width: `${stabilizationProgress * 100}%`,
-                        height: '100%',
-                        backgroundColor: emotionColors[detectedEmotion],
-                        transition: 'width 0.1s ease',
-                        borderRadius: '2px'
-                      }} />
-                    </div>
-                  </>
-                )}
+                
                 {musicMode === 'manual' && (
                   <div style={{ fontSize: '10px', marginTop: '4px' }}>
                     Handmatig
@@ -534,7 +512,7 @@ function App() {
         )}
         
         <div className="footer">
-          Opmerking: Deze demo vereist toegang tot je camera om gezichtsuitdrukkingen te detecteren.
+          Deze demo vereist toegang tot je camera om gezichtsuitdrukkingen te detecteren.
           <br />Er worden geen videogegevens opgeslagen of verzonden.
         </div>
         
